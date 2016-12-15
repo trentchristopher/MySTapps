@@ -39,7 +39,7 @@ preferences {
   section("..and reset Occupancy if Motion is Inactive for.. (default 10)") {
 		input "motionThreshold", "number", description: "Number of minutes", required: false
 	}
-  section("Also, Reset Occupancy if any of these presence sensors leave..") {
+  section("Also, check contacts and motion if any of these people leave..") {
     input "presenceSensors", "capability.presenceSensor",
     title: "Select presence sensor", multiple: true, required: false
   }
@@ -60,7 +60,6 @@ def subs() {
 	subscribe(motionSensors, "motion", motionHandler)
 	subscribe(contactsSensors, "contact", contactHandler)
 	subscribe(presenceSensors, "presence", presenceHandler)
-  allActivityCheck()
 }
 
 //EVENT HANDLER METHODS
@@ -70,35 +69,37 @@ def motionHandler(evt) {
     case "active":
       //Placeholder for active condition
     case "inactive":
-      //Placeholder for inactive condition
+      if (allMotionInactive()) {
+        motionSchedule()
+      }
     default:
-      //Placeholder for default case
-    	break
+      log.debug "motionHandler received unknown event: $evt.value"
 	}
 }
 def contactHandler(evt) {
   switch (evt.value) {
     case "open":
       occupancySwitch.on()
-      contactSchedule()
     case "closed":
-      //Placeholder for closed condition
+      if (allContactsClosed()) {
+          contactSchedule()
+      }
     default:
-    //Placeholder for default case
-    break
+      log.debug "contactHandler received unknown event: $evt.value"
   }
 }
 
 def presenceHandler(evt) {
  	switch (evt.value) {
     case "not present":
-      allActivityCheck()
-    	occupancySwitch.off()
+      if (allContactsClosed() && allMotionInactive()){
+        occupancySwitch.off()
+        log.debug "Turned off Occupancy Switch because someone left.."
+      }
     case "present":
     //Placeholder for present condition
     default:
-    //Placeholder for default case
-    break
+      log.debug "presenceHandler received unknown event: $evt.value"
   }
 }
 
@@ -106,25 +107,18 @@ def presenceHandler(evt) {
 def contactSchedule() {
   //Schedule next activity check using contact time
   def contactDelay = (contactThreshold != null && contactThreshold != "") ? contactThreshold * 60 : 600
-  runIn(contactDelay, allActivityCheck)
+  runIn(contactDelay, allActivityCheck, [overwrite: false])
 }
 def motionSchedule() {
   //Schedule next activity check using motion time
   def motionDelay = (motionThreshold != null && motionThreshold != "") ? motionThreshold * 60 : 600
-  runIn(motionDelay, allActivityCheck)
+  runIn(motionDelay, allActivityCheck, [overwrite: false])
 }
 def allActivityCheck() {
-  def result1 = allContactsClosed()
-  def result2 = allMotionInactive()
-  def result3 = allClosedForTime()
-  def result4 = allInactiveForTime()
-  log.debug "allContactsClosed()=$result1"
-  log.debug "allMotionInactive()=$result2"
-  log.debug "allClosedForTime()=$result3"
-  log.debug "allInactiveForTime()=$result4"
-
+  if(allClosedForTime() && allInactiveForTime()) {
+    occupancySwitch.off()
+  }
 }
-
 
 def allContactsClosed() {
   def result = true
@@ -160,7 +154,6 @@ def allClosedForTime() {
       elapsed >= delay
     }
   }
-
   def result = longEnough != null ? longEnough.size() == contactsSensors.size() : false
   return result
 }
