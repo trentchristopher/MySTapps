@@ -1,1 +1,2 @@
-# MySmartapps
+# MySmartapps for SmartThings
+
