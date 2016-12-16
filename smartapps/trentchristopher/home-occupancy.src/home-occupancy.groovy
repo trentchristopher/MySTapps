@@ -29,15 +29,18 @@ preferences {
     input "contactsSensors", "capability.contactSensor",
     title: "Contact Sensors to monitor", multiple: true, required: false
   }
-  section("If the Contacts are Closed for.. (default 10)") {
-		input "contactThreshold", "number", description: "Number of minutes", required: false
+  section("If the Contacts are Closed for..(1-1440)") {
+		input "contactThreshold", "number",
+    title: "Number of minutes", range: "1..1440", defaultValue: "10", required: false
 	}
   section("..Monitor these motion sensors..") {
 		input "motionSensors", "capability.motionSensor",
     title: "Motion Sensors to monitor", multiple: true, required: false
+    input "motionTrigger", "bool", title: "Occupancy on motion?"
 	}
-  section("..and reset Occupancy if Motion is Inactive for.. (default 10)") {
-		input "motionThreshold", "number", description: "Number of minutes", required: false
+  section("..and reset Occupancy if Motion is Inactive for..(1-1440)") {
+		input "motionThreshold", "number",
+    title: "Number of minutes", range: "1..1440", defaultValue: "10", required: false
 	}
   section("Also, check contacts and motion if any of these people leave..") {
     input "presenceSensors", "capability.presenceSensor",
@@ -67,7 +70,10 @@ def motionHandler(evt) {
 //log.debug "motionHandler processed $evt.value"
   switch (evt.value) {
     case "active":
-      //Placeholder for active condition
+      if (motionTrigger) {
+        occupancySwitch.on()
+        log.debug "turned on Occupancy because $evt.name detected motion"
+      }
     case "inactive":
       if (allMotionInactive()) {
         motionSchedule()
@@ -150,7 +156,7 @@ def allClosedForTime() {
         return false
       }
       def elapsed = now() - state.rawDateCreated.time
-      def delay = (contactThreshold != null && contactThreshold != "") ? contactThreshold * 60 * 1000 : 60 * 1000
+      def delay = (contactThreshold != null && contactThreshold != "") ? timeOffset(contactThreshold) : timeOffset(10)
       elapsed >= delay
     }
   }
@@ -167,7 +173,7 @@ def allInactiveForTime() {
       return false
       }
       def elapsed = now() - state.rawDateCreated.time
-      def delay = (motionThreshold != null && motionThreshold != "") ? motionThreshold * 60 * 1000 : 10 * 60 * 1000
+      def delay = (motionThreshold != null && motionThreshold != "") ? timeOffset(motionThreshold) : timeOffset(10)
       elapsed >= delay
     }
   }
