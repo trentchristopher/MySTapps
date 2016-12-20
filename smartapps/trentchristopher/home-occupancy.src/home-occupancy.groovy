@@ -26,11 +26,11 @@ definition(
 
 preferences {
 	section("Occupancy is detected when any of these sensors open..") {
-    input "contactsSensors", "capability.contactSensor",
+    input "contactSensors", "capability.contactSensor",
     title: "Contact Sensors to monitor", multiple: true, required: false
   }
   section("If the Contacts are Closed for..(1-1440)") {
-		input "contactThreshold", "number",
+		input "contactDelay", "number",
     title: "Number of minutes", range: "1..1440", defaultValue: "10", required: false
 	}
   section("..Monitor these motion sensors..") {
@@ -39,7 +39,7 @@ preferences {
     input "motionTrigger", "bool", title: "Occupancy on motion?"
 	}
   section("..and reset Occupancy if Motion is Inactive for..(1-1440)") {
-		input "motionThreshold", "number",
+		input "motionDelay", "number",
     title: "Number of minutes", range: "1..1440", defaultValue: "10", required: false
 	}
   section("Also, check contacts and motion if any of these people leave..") {
@@ -61,8 +61,11 @@ def updated() {
 }
 def subs() {
 	subscribe(motionSensors, "motion", motionHandler)
-	subscribe(contactsSensors, "contact", contactHandler)
+	subscribe(contactSensors, "contact", contactHandler)
 	subscribe(presenceSensors, "presence", presenceHandler)
+    activityCheckSchedule(contactDelay)
+    activityCheckSchedule(motionDelay)
+    allActivityCheck()
 }
 
 //EVENT HANDLER METHODS
@@ -73,11 +76,14 @@ def motionHandler(evt) {
       if (motionTrigger) {
         occupancySwitch.on()
         log.debug "turned on Occupancy because $evt.name detected motion"
+        sendNotificationEvent ("Occupancy turned On because $evt.name detected motion")
       }
+      break
     case "inactive":
       if (allMotionInactive()) {
-        motionSchedule()
+        activityCheckSchedule(motionDelay)
       }
+      break
     default:
       log.debug "motionHandler received unknown event: $evt.value"
 	}
@@ -86,10 +92,13 @@ def contactHandler(evt) {
   switch (evt.value) {
     case "open":
       occupancySwitch.on()
+      sendNotificationEvent ("Occupancy turned On because $evt.name opened")
+      break
     case "closed":
       if (allContactsClosed()) {
-          contactSchedule()
+          activityCheckSchedule(contactDelay)
       }
+      break
     default:
       log.debug "contactHandler received unknown event: $evt.value"
   }
@@ -101,34 +110,35 @@ def presenceHandler(evt) {
       if (allContactsClosed() && allMotionInactive()){
         occupancySwitch.off()
         log.debug "Turned off Occupancy Switch because someone left.."
+        sendNotificationEvent ("Turned off Occupancy Switch because $evt.name left, doors were closed, and motion was inactive.")
       }
+      break
     case "present":
     //Placeholder for present condition
+      break
     default:
       log.debug "presenceHandler received unknown event: $evt.value"
   }
 }
 
 //HELPER METHODS
-def contactSchedule() {
+def activityCheckSchedule(delayMinutes) {
   //Schedule next activity check using contact time
-  def contactDelay = (contactThreshold != null && contactThreshold != "") ? contactThreshold * 60 : 600
-  runIn(contactDelay, allActivityCheck, [overwrite: false])
-}
-def motionSchedule() {
-  //Schedule next activity check using motion time
-  def motionDelay = (motionThreshold != null && motionThreshold != "") ? motionThreshold * 60 : 600
-  runIn(motionDelay, allActivityCheck, [overwrite: false])
+  def delaySeconds = delayMinutes ? delayMinutes * 60 : 600
+  runIn(delaySeconds, allActivityCheck, [overwrite: false])
 }
 def allActivityCheck() {
-  if(allClosedForTime() && allInactiveForTime()) {
-    occupancySwitch.off()
+  if(allContactsClosed() && allMotionInactive()) {
+    if(allStateForTime(contactSensors, "contact", contactDelay) && 
+       allStateForTime(motionSensors, "motion", motionDelay)) {
+      occupancySwitch.off()
+    }
   }
 }
 
 def allContactsClosed() {
   def result = true
-  for (sensor in contactsSensors) {
+  for (sensor in contactSensors) {
     if (sensor.currentContact != "closed") {
       result = false
     }
@@ -147,36 +157,24 @@ def allMotionInactive() {
   return result
 }
 
-def allClosedForTime() {
-  if (allContactsClosed()) {
-    def longEnough = contactsSensors.findAll { contact ->
-      def state = contact.currentState("contact")
-      if (!state) {
-        // State is unkownn, treat it as not away long enough
-        return false
-      }
-      def elapsed = now() - state.rawDateCreated.time
-      def delay = (contactThreshold != null && contactThreshold != "") ? timeOffset(contactThreshold) : timeOffset(10)
-      elapsed >= delay
+def allStateForTime(sensors, stateName, delayMinutes) {
+  def delayMilliseconds = delayMinutes ? timeOffset(delayMinutes) : timeOffset(10)
+  def threshold = now() - delayMilliseconds
+  def pastThreshold = sensors.findAll {sensor ->
+    def state = sensor.currentState("${stateName}")
+    if (!state) {
+      return false // State is unknown, treat it as not away long enough
     }
-  }
-  def result = longEnough != null ? longEnough.size() == contactsSensors.size() : false
+/*  Logging for debug...
+    log.debug "sensor = ${sensor}, state = ${state}"
+    log.debug "state time= ${state.rawDateCreated.time}, threshold=${threshold}"
+    log.debug "result= ${state.rawDateCreated.time < threshold}"
+*/
+    state.rawDateCreated.time < threshold
+    }
+  def result =  pastThreshold?.size() == sensors?.size()
+  log.debug "pastThreshold = ${pastThreshold?.size()}, sensors = ${sensors?.size()}"
+  log.debug "allStateForTime($sensors, $stateName, $delayMinutes) = ${result}"
   return result
 }
 
-def allInactiveForTime() {
-  if (allMotionInactive()) {
-    def longEnough = motionSensors.findAll { motion ->
-      def state = motion.currentState("motion")
-      if (!state) {
-        // State is not closed, treat it as not away long enough
-      return false
-      }
-      def elapsed = now() - state.rawDateCreated.time
-      def delay = (motionThreshold != null && motionThreshold != "") ? timeOffset(motionThreshold) : timeOffset(10)
-      elapsed >= delay
-    }
-  }
-  def result = longEnough != null ? longEnough.size() == motionSensors.size() : false
-  return result
-}
