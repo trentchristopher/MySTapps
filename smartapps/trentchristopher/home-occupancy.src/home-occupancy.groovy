@@ -17,7 +17,7 @@ definition(
     name: "Home Occupancy",
     namespace: "trentchristopher",
     author: "Trent Christopher",
-    description: "Detect Occupancy in your home using activity from switches and motion.",
+    description: "Detect Occupancy in your home using activity from switches, motion, and presence.",
     category: "Convenience",
     iconUrl: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience.png",
     iconX2Url: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience@2x.png",
@@ -25,28 +25,36 @@ definition(
 
 
 preferences {
-	section("Occupancy is detected when any of these sensors open..") {
+  section("Occupancy is true when these sensors arrive.."){
+    input "arrivingSensors", "capability.presenceSensor",
+    title: "Select presence sensor(s)", multiple: true, required: false
+  }
+	section("Also, true if any of these sensors opened..") {
     input "contactSensors", "capability.contactSensor",
     title: "Contact Sensors to monitor", multiple: true, required: false
   }
-  section("If the Contacts are Closed for..(1-1440)") {
-		input "contactDelay", "number",
-    title: "Number of minutes", range: "1..1440", defaultValue: "10", required: false
-	}
-  section("..Monitor these motion sensors..") {
+  section("Monitor these motion sensors..") {
 		input "motionSensors", "capability.motionSensor",
     title: "Motion Sensors to monitor", multiple: true, required: false
     input "motionTrigger", "bool", title: "Occupancy on motion?"
 	}
-  section("..and reset Occupancy if Motion is Inactive for..(1-1440)") {
-		input "motionDelay", "number",
+  section("No Occupancy if there has been no arrivals in the last(1..240 hours).."){
+    input "arrivalHours", "number",
+    title: "Number of hours", range: "1..240", defaultValue: "12", required: false
+  }
+  section("..and Contacts have been Closed for(1-1440 minutes)..") {
+		input "contactMinutes", "number",
     title: "Number of minutes", range: "1..1440", defaultValue: "10", required: false
 	}
-  section("Also, check contacts and motion if any of these people leave..") {
-    input "presenceSensors", "capability.presenceSensor",
-    title: "Select presence sensor", multiple: true, required: false
+  section("..and Motion is Inactive for(1-1440 minutes)") {
+		input "motionMinutes", "number",
+    title: "Number of minutes", range: "1..1440", defaultValue: "10", required: false
+	}
+  section("Also, check contacts and motion if any of these sensors leave..") {
+    input "departingSensors", "capability.presenceSensor",
+    title: "Select presence sensor(s)", multiple: true, required: false
   }
-  section("Control this switch..") {
+  section("Control this switch for occupancy") {
     input "occupancySwitch", "capability.switch",
     title: "Select Switch", multiple: false
   }
@@ -60,86 +68,100 @@ def updated() {
 	subs()
 }
 def subs() {
-	subscribe(motionSensors, "motion", motionHandler)
-	subscribe(contactSensors, "contact", contactHandler)
-	subscribe(presenceSensors, "presence", presenceHandler)
-    activityCheckSchedule(contactDelay)
-    activityCheckSchedule(motionDelay)
-    allActivityCheck()
+  subscribe(arrivingSensors, "presence", arrivalHandler)
+  subscribe(contactSensors, "contact", contactHandler)
+  subscribe(motionSensors, "motion", motionHandler)
+  subscribe(departingSensors, "presence", departingHandler)
+  allActivityCheck()
 }
 
 //EVENT HANDLER METHODS
+def arrivalHandler(evt) {
+ 	switch (evt.value) {
+    case "not present":
+    //Placeholder for not present condition
+      break
+    case "present":
+      if (occupancySwitch.currentValue("switch") != "on") {
+        occupancySwitch.on()
+        sendNotificationEvent ("Occupancy turned On because $evt.displayName arrived")
+        }
+      break
+    default:
+      log.debug "arrivalHandler received unknown event: $evt.value"
+  }
+}
+def contactHandler(evt) {
+  switch (evt.value) {
+    case "open":
+      if (occupancySwitch.currentValue("switch") != "on") {
+        occupancySwitch.on()
+        sendNotificationEvent ("Occupancy turned On because $evt.displayName opened")
+      }
+      break
+    case "closed":
+//      break
+    default:
+      log.debug "contactHandler received unknown event: $evt.value"
+  }
+}
 def motionHandler(evt) {
 //log.debug "motionHandler processed $evt.value"
   switch (evt.value) {
     case "active":
       if (motionTrigger) {
-        occupancySwitch.on()
-        log.debug "turned on Occupancy because $evt.name detected motion"
-        sendNotificationEvent ("Occupancy turned On because $evt.name detected motion")
+        if (occupancySwitch.currentValue("switch") != "on") {
+          occupancySwitch.on()
+          log.debug "turned on Occupancy because $evt.name detected motion"
+          sendNotificationEvent ("Occupancy turned On because $evt.name detected motion")
+        }
       }
       break
     case "inactive":
-      if (allMotionInactive()) {
-        activityCheckSchedule(motionDelay)
-      }
-      break
+//      break
     default:
       log.debug "motionHandler received unknown event: $evt.value"
 	}
 }
-def contactHandler(evt) {
-  switch (evt.value) {
-    case "open":
-      occupancySwitch.on()
-      sendNotificationEvent ("Occupancy turned On because $evt.name opened")
-      break
-    case "closed":
-      if (allContactsClosed()) {
-          activityCheckSchedule(contactDelay)
-      }
-      break
-    default:
-      log.debug "contactHandler received unknown event: $evt.value"
-  }
-}
-
-def presenceHandler(evt) {
+def departingHandler(evt) {
  	switch (evt.value) {
     case "not present":
       if (allContactsClosed() && allMotionInactive()){
-        occupancySwitch.off()
-        log.debug "Turned off Occupancy Switch because someone left.."
-        sendNotificationEvent ("Turned off Occupancy Switch because $evt.name left, doors were closed, and motion was inactive.")
+        if (occupancySwitch.currentValue("switch") != "off") {
+          occupancySwitch.off()
+          log.debug "Turned off Occupancy Switch because someone left.."
+          sendNotificationEvent ("Turned off Occupancy Switch because $evt.displayName left, doors were closed, and motion was inactive.")
+        }
       }
       break
     case "present":
     //Placeholder for present condition
-      break
+    //   break
     default:
-      log.debug "presenceHandler received unknown event: $evt.value"
+      log.debug "departingHandler received unknown event: $evt.value"
   }
 }
 
-//HELPER METHODS
-def activityCheckSchedule(delayMinutes) {
-  //Schedule next activity check using contact time
-  def delaySeconds = delayMinutes ? delayMinutes * 60 : 600
-  runIn(delaySeconds, allActivityCheck, [overwrite: false])
-}
+// Main Activity Handler
 def allActivityCheck() {
-  if(allContactsClosed() && allMotionInactive()) {
-    if(allStateForTime(contactSensors, "contact", contactDelay) && 
-       allStateForTime(motionSensors, "motion", motionDelay)) {
+  def allClosed = allContactsClosed() && allStateForTime(contactSensors, "contact", contactMinutes)
+  def allInactive = allMotionInactive() && allStateForTime(motionSensors, "motion", motionMinutes)
+  def noPresence = allNotPresent()
+  if(allClosed && allInactive && noPresence) {
+    if (occupancySwitch.currentValue("switch") != "off") {
       occupancySwitch.off()
-    }
+      sendNotificationEvent ("Turned off Occupancy Switch because after delay time, doors were closed, and motion was inactive.")
+    } 
+    
+  } else {
+    scheduleNext() 
   }
 }
-
+// STATE HELPERS
 def allContactsClosed() {
   def result = true
   for (sensor in contactSensors) {
-    if (sensor.currentContact != "closed") {
+    if (sensor.currentValue("contact") != "closed") {
       result = false
     }
   }
@@ -149,16 +171,35 @@ def allContactsClosed() {
 def allMotionInactive() {
   def result = true
   for (sensor in motionSensors) {
-    if (sensor.currentMotion != "inactive") {
+    if (sensor.currentValue("motion") != "inactive") {
       result = false
     }
   }
   log.debug "allMotionInactive: $result"
   return result
 }
+def allNotPresent() {
+  def result = true
+  def delayMilliseconds = arrivalHours ? timeOffset(arrivalHours*60) : timeOffset(60)
+  def threshold = now() - delayMilliseconds
+  for (sensor in arrivingSensors) {
+    def state = sensor.currentState("presence")
+//    log.debug "state= ${state}, value= ${sensor.currentValue("presence")}"
+//   	log.debug "threshold(${threshold}) < state.rawDateCreated.time(${state.rawDateCreated.time}) = ${threshold < state.rawDateCreated.time}"
+    //Test if any other state than "not present", if in "not present" state check if state is old enough
+    if (sensor.currentValue("presence") != "not present") {
+      result = false
+    } else if (threshold < state.rawDateCreated.time) {
+    //If threshold is less than state created time, then it's too new to consider "not present"
+      result = false
+    }
+  }
+  log.debug "allNotPresent: $result"
+  return result
+}
 
-def allStateForTime(sensors, stateName, delayMinutes) {
-  def delayMilliseconds = delayMinutes ? timeOffset(delayMinutes) : timeOffset(10)
+def allStateForTime(sensors, stateName, minutes) {
+  def delayMilliseconds = minutes ? timeOffset(minutes) : timeOffset(10)
   def threshold = now() - delayMilliseconds
   def pastThreshold = sensors.findAll {sensor ->
     def state = sensor.currentState("${stateName}")
@@ -173,8 +214,47 @@ def allStateForTime(sensors, stateName, delayMinutes) {
     state.rawDateCreated.time < threshold
     }
   def result =  pastThreshold?.size() == sensors?.size()
-  log.debug "pastThreshold = ${pastThreshold?.size()}, sensors = ${sensors?.size()}"
-  log.debug "allStateForTime($sensors, $stateName, $delayMinutes) = ${result}"
+//  log.debug "pastThreshold = ${pastThreshold?.size()}, sensors = ${sensors?.size()}"
+  log.debug "allStateForTime($sensors, $stateName, $minutes) = ${result}"
   return result
+}
+// SCHEDULING HELPERS
+def scheduleNext() {
+  def delaySeconds = (nextThreshold() / 1000)
+  log.debug "scheduleNext scheduled next check in $delaySeconds seconds"
+  runIn(delaySeconds, allActivityCheck, [overwrite: false])
+}
+
+def nextThreshold() {
+  def eventTimes = []
+  arrivingSensors.each { sensor ->
+    def state = sensor.currentState("presence")
+    if (state) {
+      def nextTime = state.rawDateCreated.time + timeOffset(arrivalHours * 60)
+      if (nextTime > now()) {
+        eventTimes << nextTime - now()
+      }
+    }
+  }
+  contactSensors.each { sensor ->
+    def state = sensor.currentState("contact")
+    if (state) {
+      def nextTime = state.rawDateCreated.time + timeOffset(contactMinutes)
+      if (nextTime > now()) {
+        eventTimes << nextTime - now()
+      }
+    }
+  }
+  motionSensors.each { sensor ->
+    def state = sensor.currentState("motion")
+    if (state) {
+      def nextTime = state.rawDateCreated.time + timeOffset(motionMinutes)
+      if (nextTime > now()) {
+        eventTimes << nextTime - now()
+      }
+    }
+  }
+  log.debug "eventTimes = $eventTimes, min= ${eventTimes.min()}"
+  eventTimes.min()
 }
 
