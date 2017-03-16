@@ -29,12 +29,12 @@ preferences {
     input "arrivingSensors", "capability.presenceSensor",
     title: "Select presence sensor(s)", multiple: true, required: false
   }
-	section("Also, true if any of these sensors opened..") {
+  section("Also, true if any of these sensors opened..") {
     input "contactSensors", "capability.contactSensor",
     title: "Contact Sensors to monitor", multiple: true, required: false
   }
   section("Monitor these motion sensors..") {
-		input "motionSensors", "capability.motionSensor",
+	input "motionSensors", "capability.motionSensor",
     title: "Motion Sensors to monitor", multiple: true, required: false
     input "motionTrigger", "bool", title: "Occupancy on motion?"
 	}
@@ -43,11 +43,11 @@ preferences {
     title: "Number of hours", range: "1..240", defaultValue: "12", required: false
   }
   section("..and Contacts have been Closed for(1-1440 minutes)..") {
-		input "contactMinutes", "number",
+	input "contactMinutes", "number",
     title: "Number of minutes", range: "1..1440", defaultValue: "10", required: false
 	}
   section("..and Motion is Inactive for(1-1440 minutes)") {
-		input "motionMinutes", "number",
+	input "motionMinutes", "number",
     title: "Number of minutes", range: "1..1440", defaultValue: "10", required: false
 	}
   section("Also, check contacts and motion if any of these sensors leave..") {
@@ -63,10 +63,12 @@ preferences {
 def installed() {
 	subs()
 }
+
 def updated() {
 	unsubscribe()
 	subs()
 }
+
 def subs() {
   subscribe(arrivingSensors, "presence", arrivalHandler)
   subscribe(contactSensors, "contact", contactHandler)
@@ -79,7 +81,7 @@ def subs() {
 def arrivalHandler(evt) {
  	switch (evt.value) {
     case "not present":
-    //Placeholder for not present condition
+      allActivityCheck()
       break
     case "present":
       if (occupancySwitch.currentValue("switch") != "on") {
@@ -100,7 +102,8 @@ def contactHandler(evt) {
       }
       break
     case "closed":
-//      break
+      scheduleNext()
+      break
     default:
       log.debug "contactHandler received unknown event: $evt.value"
   }
@@ -118,7 +121,8 @@ def motionHandler(evt) {
       }
       break
     case "inactive":
-//      break
+      scheduleNext()
+      break
     default:
       log.debug "motionHandler received unknown event: $evt.value"
 	}
@@ -144,18 +148,19 @@ def departingHandler(evt) {
 
 // Main Activity Handler
 def allActivityCheck() {
+  log.debug "<<<<<<<<<< ACTIVITY CHECK >>>>>>>>>>"
   def allClosed = allContactsClosed() && allStateForTime(contactSensors, "contact", contactMinutes)
   def allInactive = allMotionInactive() && allStateForTime(motionSensors, "motion", motionMinutes)
   def noPresence = allNotPresent()
   if(allClosed && allInactive && noPresence) {
     if (occupancySwitch.currentValue("switch") != "off") {
       occupancySwitch.off()
-      sendNotificationEvent ("Turned off Occupancy Switch because after delay time, doors were closed, and motion was inactive.")
-    } 
-    
+      sendNotificationEvent ("Home Occupancy: Turned off Occupancy Switch because after delay time, doors were closed, and motion was inactive.")
+    }
   } else {
-    scheduleNext() 
+    sendNotificationEvent ("Home Occupancy: All Closed? $allClosed, All Motion Inactive? $allInactive, No Presence? $noPresence")
   }
+  scheduleNext() 
 }
 // STATE HELPERS
 def allContactsClosed() {
@@ -184,15 +189,15 @@ def allNotPresent() {
   def threshold = now() - delayMilliseconds
   for (sensor in arrivingSensors) {
     def state = sensor.currentState("presence")
-//    log.debug "state= ${state}, value= ${sensor.currentValue("presence")}"
-//   	log.debug "threshold(${threshold}) < state.rawDateCreated.time(${state.rawDateCreated.time}) = ${threshold < state.rawDateCreated.time}"
-    //Test if any other state than "not present", if in "not present" state check if state is old enough
-    if (sensor.currentValue("presence") != "not present") {
-      result = false
-    } else if (threshold < state.rawDateCreated.time) {
-    //If threshold is less than state created time, then it's too new to consider "not present"
-      result = false
-    }
+//  log.debug "state= ${state}, value= ${sensor.currentValue("presence")}"
+// 	log.debug "threshold(${threshold}) < state.rawDateCreated.time(${state.rawDateCreated.time}) = ${threshold < state.rawDateCreated.time}"
+    //If present, check if event is recent
+	if (sensor.currentValue("presence") == "present") {
+    	if (threshold < state.rawDateCreated.time) {
+    		log.debug "allNotPresent returned false because ${sensor} state is recent"
+      		result = false
+    	} else {log.debug "${sensor} state is stale"}
+  	}
   }
   log.debug "allNotPresent: $result"
   return result
@@ -222,7 +227,7 @@ def allStateForTime(sensors, stateName, minutes) {
 def scheduleNext() {
   def delaySeconds = (nextThreshold() / 1000)
   log.debug "scheduleNext scheduled next check in $delaySeconds seconds"
-  runIn(delaySeconds, allActivityCheck, [overwrite: false])
+  runIn(delaySeconds, allActivityCheck, [overwrite: true])
 }
 
 def nextThreshold() {
